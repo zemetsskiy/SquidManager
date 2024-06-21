@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify
 import os
-import random
+import crypt
 import subprocess
+import random
 
 app = Flask(__name__)
 
@@ -11,7 +12,29 @@ def generate_new_port(exclude_ports):
         if port not in exclude_ports:
             return port
 
-def update_squid_config(ip, old_port):
+def update_squid_password(username: str, password: str) -> None:
+    """Обновление пароля пользователя в файле паролей Squid."""
+    hashed_password = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
+    with open('/etc/squid/passwd', 'r') as file:
+        lines = file.readlines()
+    
+    updated = False
+    new_lines = []
+    for line in lines:
+        if line.startswith(username + ":"):
+            new_lines.append(f"{username}:{hashed_password}\n")
+            updated = True
+        else:
+            new_lines.append(line)
+    
+    if not updated:
+        new_lines.append(f"{username}:{hashed_password}\n")
+    
+    # Запись в файл паролей с использованием sudo
+    process = subprocess.Popen(['sudo', 'tee', '/etc/squid/passwd'], stdin=subprocess.PIPE)
+    process.communicate(input=''.join(new_lines).encode())
+
+def update_squid_port(ip, old_port):
     new_port = generate_new_port([7777, old_port])
     ip_underscored = ip.replace('.', '_')
     
@@ -20,17 +43,18 @@ def update_squid_config(ip, old_port):
 
     # Новые строки конфигурации
     new_http_port = f"http_port {ip}:{new_port}\n"
-    new_acl_ip = f"acl ip_{ip_underscored} myip {ip}\n"
+    new_acl_ip = f"acl ip_{ip_underscored}_{new_port} myip {ip}\n"
     new_acl_port = f"acl port_{new_port} localport {new_port}\n"
-    new_http_access_allow = f"http_access allow ip_{ip_underscored} port_{new_port}\n"
-    new_http_access_deny = f"http_access deny ip_{ip_underscored} !port_{new_port}\n"
+    new_http_access_allow = f"http_access allow Arni_users ip_{ip_underscored}_{new_port} port_{new_port}\n"
+    new_http_access_deny = f"http_access deny ip_{ip_underscored}_{new_port} !port_{new_port}\n"
 
     # Удаление всех строк, связанных с конкретным IP и старым портом
     new_lines = []
     for line in lines:
         if (f"http_port {ip}:{old_port}" in line or
-            f"http_access allow ip_{ip_underscored} port_{old_port}" in line or
-            f"http_access deny ip_{ip_underscored} !port_{old_port}" in line):
+            f"http_access allow Arni_users ip_{ip_underscored}_{old_port}" in line or
+            f"http_access deny ip_{ip_underscored}_{old_port}" in line or
+	    f"acl ip_{ip_underscored}_{old_port} myip {ip}" in line):
             continue
         new_lines.append(line)
 
@@ -44,56 +68,61 @@ def update_squid_config(ip, old_port):
     final_lines = []
     for line in new_lines:
         final_lines.append(line)
-        if not http_port_inserted and line.startswith("http_port"):
+        if not http_port_inserted and line.strip() == "# Port configuration":
             final_lines.append(new_http_port)
             http_port_inserted = True
-        elif not acl_ip_inserted and line.startswith("acl ip_"):
+        elif not acl_ip_inserted and line.strip() == "acl Arni_users proxy_auth Arni":
             final_lines.append(new_acl_ip)
             acl_ip_inserted = True
-        elif not acl_port_inserted and line.startswith("acl port_"):
+        elif not acl_port_inserted and line.strip().startswith("acl ip_") and "myip" in line:
             final_lines.append(new_acl_port)
             acl_port_inserted = True
-        elif not http_access_allow_inserted and line.startswith("http_access allow"):
+        elif not http_access_allow_inserted and line.strip() == "# Allow specific IP on specific ports with specific users":
             final_lines.append(new_http_access_allow)
             http_access_allow_inserted = True
-        elif not http_access_deny_inserted and line.startswith("# Deny specific IP on other ports"):
+        elif not http_access_deny_inserted and line.strip() == "# Deny specific IP on other ports":
             final_lines.append(new_http_access_deny)
             http_access_deny_inserted = True
-
-    # Если какие-то строки не были вставлены
-    if not http_port_inserted:
-        final_lines.append(new_http_port)
-    if not acl_ip_inserted:
-        final_lines.append(new_acl_ip)
-    if not acl_port_inserted:
-        final_lines.append(new_acl_port)
-    if not http_access_allow_inserted:
-        final_lines.append(new_http_access_allow)
-    if not http_access_deny_inserted:
-        final_lines.append(new_http_access_deny)
 
     # Запись в файл конфигурации с использованием sudo
     new_config = ''.join(final_lines)
     process = subprocess.Popen(['sudo', 'tee', '/etc/squid/squid.conf'], stdin=subprocess.PIPE)
     process.communicate(input=new_config.encode())
 
-    # Проверка конфигурации Squid перед перезапуском
-    result = subprocess.run(['sudo', 'squid', '-k', 'parse'], capture_output=True, text=True)
-    if result.returncode != 0:
-        return f"Squid configuration error: {result.stderr}"
-
     os.system('sudo systemctl restart squid')
     return new_port
+
+def update_squid_acl(proxies: list, username: str) -> None:
+    """Добавление правил ACL в конфигурацию Squid для сопоставления прокси и логинов."""
+    with open('/etc/squid/squid.conf', 'r') as file:
+        lines = file.readlines()
+
+
+def update_proxies_credentials(proxies: list, username: str, password: str) -> None:
+    """Обновление конфигурации и паролей для массива прокси."""
+    update_squid_password(username, password)
+    update_squid_acl(proxies, username)
 
 @app.route('/update_port', methods=['POST'])
 def update_port():
     data = request.json
     ip = data['ip']
     old_port = data['port']
-    new_port = update_squid_config(ip, old_port)
-    if isinstance(new_port, str) and new_port.startswith("Squid configuration error"):
-        return jsonify({'status': 'error', 'message': new_port}), 400
+    new_port = update_squid_port(ip, old_port)
     return jsonify({'status': 'success', 'new_port': new_port})
+
+
+@app.route('/update_credentials', methods=['POST'])
+def update_credentials():
+    """Маршрут для обновления логина и пароля для массива прокси."""
+    data = request.json
+    proxies = data['proxies']
+    username = data['username']
+    password = data['password']
+    
+    update_proxies_credentials(proxies, username, password)
+    
+    return jsonify({'status': 'success', 'message': 'Credentials updated successfully'})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
