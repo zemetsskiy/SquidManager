@@ -3,6 +3,7 @@ import os
 import crypt
 import subprocess
 import random
+import re
 
 app = Flask(__name__)
 
@@ -96,6 +97,51 @@ def update_squid_acl(proxies: list, username: str) -> None:
     """Добавление правил ACL в конфигурацию Squid для сопоставления прокси и логинов."""
     with open('/etc/squid/squid.conf', 'r') as file:
         lines = file.readlines()
+
+    # Удаление всех строк, связанных с предыдущими пользователями для указанных прокси
+    new_lines = []
+    for line in lines:
+        # Удаление строк вида 'http_access allow Arni_users ip_194_87_134_2_4032 port_4032' с использованием регулярных выражений
+        if any(re.search(rf"http_access allow \S+ ip_{proxy.split(':')[0].replace('.', '_')}_{proxy.split(':')[1]} port_{proxy.split(':')[1]}", line) for proxy in proxies):
+            continue
+        new_lines.append(line)
+
+    # Новые строки ACL для каждого прокси
+    final_lines = []
+    inserted_acl_user = False
+    inserted_http_access_allow = False
+    inserted_http_access_deny = False
+
+    for line in new_lines:
+        final_lines.append(line)
+        
+        # Вставка строки acl {username}_users proxy_auth {username} после acl Arni_users proxy_auth Arni
+        if not inserted_acl_user and line.strip() == "acl Arni_users proxy_auth Arni":
+            final_lines.append(f"acl {username}_users proxy_auth {username}\n")
+            inserted_acl_user = True
+        
+        # Вставка строк http_access allow {username}_users ip_{ip_underscored}_{port} port_{port} после # Allow specific IP on specific ports with specific users
+        if not inserted_http_access_allow and line.strip() == "# Allow specific IP on specific ports with specific users":
+            for proxy in proxies:
+                ip, port = proxy.split(':')
+                ip_underscored = ip.replace('.', '_')
+                final_lines.append(f"http_access allow {username}_users ip_{ip_underscored}_{port} port_{port}\n")
+            inserted_http_access_allow = True
+        
+        # Вставка строк http_access deny {username}_users !port_{port} после http_access deny ip_{ip.replace('.', '_')}_{port} !port_{port}
+        if not inserted_http_access_deny and any(line.strip() == f"http_access deny ip_{proxy.split(':')[0].replace('.', '_')}_{proxy.split(':')[1]} !port_{proxy.split(':')[1]}" for proxy in proxies):
+            for proxy in proxies:
+                ip, port = proxy.split(':')
+                ip_underscored = ip.replace('.', '_')
+                final_lines.append(f"http_access deny {username}_users !port_{port}\n")
+            inserted_http_access_deny = True
+
+    # Запись в файл конфигурации с использованием sudo
+    new_config = ''.join(final_lines)
+    process = subprocess.Popen(['sudo', 'tee', '/etc/squid/squid.conf'], stdin=subprocess.PIPE)
+    process.communicate(input=new_config.encode())
+
+    os.system('sudo systemctl restart squid')
 
 
 def update_proxies_credentials(proxies: list, username: str, password: str) -> None:
