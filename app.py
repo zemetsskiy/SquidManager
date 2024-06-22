@@ -90,7 +90,7 @@ def update_squid_port(ip, old_port):
     process = subprocess.Popen(['sudo', 'tee', '/etc/squid/squid.conf'], stdin=subprocess.PIPE)
     process.communicate(input=new_config.encode())
 
-    os.system('sudo systemctl restart squid')
+    os.system('sudo squid -k reconfigure')
     return new_port
 
 def update_squid_acl(proxies: list, username: str) -> None:
@@ -141,8 +141,7 @@ def update_squid_acl(proxies: list, username: str) -> None:
     process = subprocess.Popen(['sudo', 'tee', '/etc/squid/squid.conf'], stdin=subprocess.PIPE)
     process.communicate(input=new_config.encode())
 
-    os.system('sudo systemctl restart squid')
-
+    os.system('sudo squid -k reconfigure')
 
 def update_proxies_credentials(proxies: list, username: str, password: str) -> None:
     """Обновление конфигурации и паролей для массива прокси."""
