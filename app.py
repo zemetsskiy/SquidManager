@@ -190,7 +190,8 @@ def update_squid_acl(proxies: list, username: str) -> None:
 
     new_lines = []
     for line in lines:
-        if any(re.search(rf"http_access allow \S+ ip_{proxy.split(':')[0].replace('.', '_')}_{proxy.split(':')[1]} port_{proxy.split(':')[1]}", line) for proxy in proxies):
+        if any(re.search(rf"http_access allow \S+_users ip_{proxy.split(':')[0].replace('.', '_')}_{proxy.split(':')[1]} port_{proxy.split(':')[1]}", line) or
+               re.search(rf"http_access deny \S+_users !port_{proxy.split(':')[1]}", line) for proxy in proxies):
             continue
         new_lines.append(line)
 
@@ -236,6 +237,7 @@ def update_port():
 
 def update_proxies_credentials(proxies: list, username: str, password: str) -> None:
     """Обновление учетных данных для прокси."""
+    update_squid_password(username, password)
     update_squid_acl(proxies, username)
 
 @app.route('/update_credentials', methods=['POST'])
