@@ -1,0 +1,16 @@
+from flask import Blueprint, request, jsonify
+from app.services.squid import update_proxies_credentials
+
+update_credentials_bp = Blueprint('update_credentials', __name__)
+
+@update_credentials_bp.route('/', methods=['POST'], strict_slashes=False)
+def update_credentials():
+    """Маршрут для обновления логина и пароля для массива прокси."""
+    data = request.json
+    proxies = data['proxies']
+    username = data['username']
+    password = data['password']
+    
+    update_proxies_credentials(proxies, username, password)
+    
+    return jsonify({'status': 'success', 'message': 'Credentials updated successfully'})
