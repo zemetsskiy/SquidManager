@@ -50,8 +50,10 @@ def parse_squid_logs(log_file):
             request_types[method] += 1
 
     except subprocess.CalledProcessError as e:
-        print(f"Permission error: {e}")
-        return None
+        raise RuntimeError(f"Permission error: {e}")
+
+    except Exception as e:
+        raise RuntimeError(f"{str(e)}")
 
     return {
         "traffic_by_ip_port": traffic_by_ip_port,
@@ -63,23 +65,27 @@ def parse_squid_logs(log_file):
     }
 
 def generate_statistics(log_file):
-    data = parse_squid_logs(log_file)
-    if data is None:
-        return None
+    try:
+        data = parse_squid_logs(log_file)
+        if data is None:
+            return jsonify({'status': 'error', 'message': 'Permission denied to access log file'}), 403
+        
+        statistics = {
+            "bandwidth_usage": sum(data["traffic_by_ip_port"].values()) / (1024 * 1024 * 1024),  # GB
+            "total_requests": sum(data["request_count_by_ip"].values()),
+            "average_concurrency": sum(len(times) for times in data["response_times_by_ip"].values()) / len(data["response_times_by_ip"]),
+            "requests_per_second": sum(data["request_count_by_ip"].values()) / 3600,  # 1 hour
+            "bandwidth_per_request": sum(data["traffic_by_ip_port"].values()) / sum(data["request_count_by_ip"].values()) / 1024,  # KB
+            "request_stats": {
+                "http": data["request_types"].get("CONNECT", 0),
+                "socks": data["request_types"].get("GET", 0) + data["request_types"].get("POST", 0)
+            },
+            "request_type": data["request_types"],
+            "status_codes": data["status_codes"],
+            "domains": data["domains"]
+        }
+        
+        return jsonify({'status': 'success', 'data': statistics})
     
-    statistics = {
-        "bandwidth_usage": sum(data["traffic_by_ip_port"].values()) / (1024 * 1024 * 1024),  # GB
-        "total_requests": sum(data["request_count_by_ip"].values()),
-        "average_concurrency": sum(len(times) for times in data["response_times_by_ip"].values()) / len(data["response_times_by_ip"]),
-        "requests_per_second": sum(data["request_count_by_ip"].values()) / 3600,  # 1 час
-        "bandwidth_per_request": sum(data["traffic_by_ip_port"].values()) / sum(data["request_count_by_ip"].values()) / 1024,  # KB
-        "request_stats": {
-            "http": data["request_types"].get("CONNECT", 0),
-            "socks": data["request_types"].get("GET", 0) + data["request_types"].get("POST", 0)
-        },
-        "request_type": data["request_types"],
-        "status_codes": data["status_codes"],
-        "domains": data["domains"]
-    }
-    
-    return statistics
+    except RuntimeError as e:
+        raise RuntimeError(f"Error parsing squid logs: {str(e)}")
