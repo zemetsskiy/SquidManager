@@ -151,3 +151,20 @@ def update_proxies_credentials(proxies: list, username: str, password: str) -> N
         update_squid_acl(proxies, username)
     except Exception as e:
         raise RuntimeError(f"Error updating credentials: {str(e)}")
+
+def update_blocked_domains(action, domain):
+    try:
+        if action == 'add':
+            cmd = f"echo '{domain}' | sudo tee -a /etc/squid/blocked_domains.txt > /dev/null"
+            subprocess.run(cmd, shell=True, check=True)
+        elif action == 'delete':
+            cmd = f"sudo sed -i '/^{domain}$/d' /etc/squid/blocked_domains.txt"
+            subprocess.run(cmd, shell=True, check=True)
+
+        subprocess.run(['sudo', 'squid', '-k', 'reconfigure'], check=True)
+
+        return True, None
+
+    except Exception as e:
+        error_message = str(e)
+        return False, error_message
